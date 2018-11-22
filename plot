@@ -10,42 +10,59 @@ we have two critical section here:
 2) for semaphore that permits start of while(1) loop before consumers/producers
 
 init:
-bc = 0
-bp = 1
-read = 1
-write = 1
-mutex = 1
-full = 0
-empty = 1
+0 init = 0 + 1
+1 read = 1
+2 writ = 1
+3 mute = 1
+4 sem1 = 0
+5 sem2 = 1
+6 traш = 0
 
 //consumer:
 get ready
 
-//p_bc
-	p_read
-//v_ bp
+p_read
 
 while(1) {
-	pre_code
 	p_sem1, p_mutex
-		critical section
+		IF TRASH:
+			IGNORE
+			v_mutex, v_sem2
+			CONTINUE
+		IF END:
+			TRASH
+			v_mutex, v_sem2
+			BREAK
+
+		RECIEVE & TRASH
 	v_mutex, v_sem2
-	post_code
+	WRITE_IN_STDOUT
 }
 end (+undo for read)
 
 //producer:
 get ready
 
-//p_bp
-	p_write
-//v_bc
+p_write
 
 while(1) {
-	pre_code
+	READ_FROM_FILE
 	p_sem2, p_mutex
-		critical section
+		IF READ_S > 0 AND READ_S == BUFF_SIZE:
+			SEND & UNTRASH
+		ELSE IF READ_S > 0 AND READ_S < BUFF_SIZE:
+			SEND_WHAT_YOU_CAN
+			CLEAR_REST
+			UNTRASH
+		ELSE IF READ_S == 0:
+			WRITE EOF
+			CLEAR_REST
+			UNTRASH
+			v_mutex, v_sem1
+			BREAK
+		ELSE:
+			ALYARMA!!!
+
 	v_mutex, v_sem1
-	post_code
 }
 end (+undo for write)

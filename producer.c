@@ -14,15 +14,14 @@
     semops[num].sem_flg = flag;
 
 #define INIT        semops + 0
-#define P_EM        semops + 6
-#define V_MF        semops + 8
-#define P_BC        semops + 10
-#define V_BC        semops + 11
-#define P_BP        semops + 12
-#define V_BP        semops + 13
-#define WRITE       semops + 14
-#define INCR        semops + 15
-#define TEST_END    semops + 16
+#define WRITE       semops + 6
+#define P_SEM2      semops + 7
+#define P_MUTE      semops + 8
+#define V_MUTE      semops + 9
+#define V_SEM1      semops + 10
+#define V_TRASH     semops + 11
+
+#define D if (0)
 
 void clear_rest (int read_s, char *mem_p);
 
@@ -44,66 +43,85 @@ int main(int argc, char ** argv) {
 
     int read_s = 1;
     char *buff = calloc(buff_size, sizeof(char));
-    int sems = semget(sem_key, 9, IPC_CREAT | 0644);
+    int sems = semget(sem_key, 7, IPC_CREAT | 0644);
     int shared_mem = shmget(shm_key, buff_size, IPC_CREAT | 0644);
     char* mem_p = shmat(shared_mem, NULL, 0);
 
-    struct sembuf semops[18];
-    SET_SEMOP(0, 0, 1,   IPC_NOWAIT);
-    SET_SEMOP(1, 2, 1,   IPC_NOWAIT);
-    SET_SEMOP(2, 5, 0,   IPC_NOWAIT);
-    SET_SEMOP(3, 5, 1,   IPC_NOWAIT);
-    SET_SEMOP(4, 6, 1,   IPC_NOWAIT);
-    SET_SEMOP(5, 7, 1,   IPC_NOWAIT);
-    SET_SEMOP(6, 2, -1,  SEM_UNDO);//p_empty
-    SET_SEMOP(7, 0, -1,  SEM_UNDO);//p_mutex
-    SET_SEMOP(8, 0, 1,   SEM_UNDO);//v_mutex
-    SET_SEMOP(9, 1, 1,   SEM_UNDO);//v_full
-    SET_SEMOP(10, 3, -1, SEM_UNDO);//p_bc
-    SET_SEMOP(11, 3, 1,  SEM_UNDO);//v_bc
-    SET_SEMOP(12, 4, -1, SEM_UNDO);//p_bp
-    SET_SEMOP(13, 4, 1,  SEM_UNDO);//v_bp
-    SET_SEMOP(14, 7, -1, SEM_UNDO);//write
-    SET_SEMOP(15, 8, 1,  SEM_UNDO);//incr
-    SET_SEMOP(16, 8, -1, IPC_NOWAIT | SEM_UNDO);//test_end
-    SET_SEMOP(17, 8, -1, IPC_NOWAIT | SEM_UNDO);
+    struct sembuf semops[12];
+    SET_SEMOP(0, 0, 0,   IPC_NOWAIT);//init                        
+    SET_SEMOP(1, 0, 1,   IPC_NOWAIT);                             
+    SET_SEMOP(2, 1, 1,   IPC_NOWAIT);                          
+    SET_SEMOP(3, 2, 1,   IPC_NOWAIT);                             
+    SET_SEMOP(4, 3, 1,   IPC_NOWAIT);                               
+    SET_SEMOP(5, 5, 1,   IPC_NOWAIT);
+    SET_SEMOP(6, 2, -1,  SEM_UNDO);  //write                     
+    SET_SEMOP(7, 5, -1,  0);         //p_sem2
+    SET_SEMOP(8, 3, -1,  SEM_UNDO);  //p_mute
+    SET_SEMOP(9, 3, 1,   SEM_UNDO);  //v_mute
+    SET_SEMOP(10, 4, 1,  0);         //v_sem1
+    SET_SEMOP(11, 6, 1,  IPC_NOWAIT);//v_trash
 
     int semop_ = semop(sems, INIT, 6);
-    semop_ = semop(sems, WRITE, 1);
-    semop_ = semop(sems, V_BP, 1);
-    semop_ = semop(sems, P_BC, 1);
+    D printf("init-ed %d\n", semop_);
 
+    semop_ = semop(sems, WRITE, 1);
     lseek(input_fd, 0, SEEK_SET);
+    D printf("write-ed\n");
 
     while (1) {
         read_s = read(input_fd, buff, buff_size);
 
-        semop_ = semop(sems, P_EM, 2);
+        semop_ = semop(sems, P_SEM2, 1);
+        D printf("sem2-ed\n");
+        semop_ = semop(sems, P_MUTE, 1);
+        D printf("mute-ed\n");
 
-        if (read_s > 0) {
+        if (read_s > 0 && read_s == buff_size) {
             memcpy(mem_p, buff, read_s);
+            D printf("copy-ed\n");
 
-            if (read_s < buff_size) {
-                clear_rest(read_s, mem_p);   
-            }
+            semop_ = semop(sems, V_TRASH, 1);
+            D printf("untrash-ed\n");
         }
-        else {
+        else if (read_s > 0 && read_s < buff_size) {
+            memcpy(mem_p, buff, read_s);
+            D printf("copy-ed\n");
+            clear_rest(read_s, mem_p);
+
+            semop_ = semop(sems, V_TRASH, 1);
+            D printf("untrash-ed\n");
+        }
+        else if (read_s == 0) {
             mem_p[0] = EOF;
-            semop_ = semop(sems, V_MF, 2);
+            clear_rest(1, mem_p);
+
+            semop_ = semop(sems, V_TRASH, 1);
+            D printf("untrash-ed\n");
+
+            semop_ = semop(sems, V_MUTE, 1);
+            semop_ = semop(sems, V_SEM1, 1);
             break;
         }
+        else {
+            printf("smth went wrong!\n(Do not believe consumer)\n");
+            semop_ = semop(sems, V_MUTE, 1);
+            semop_ = semop(sems, V_SEM1, 1);
+            return 0;
+        }
 
-        semop_ = semop(sems, V_MF, 2);
+        semop_ = semop(sems, V_MUTE, 1);
+        D printf("unmute-ed\n");
+        semop_ = semop(sems, V_SEM1, 1);
+        D printf("unsem1-ed\n");
     }
 
-    semop_ = semop(sems, V_BC, 1);
-    semop_ = semop(sems, P_BP, 1);
+    D printf("exit-ed\n");
 
     return 0;
 }
 
 void clear_rest (int read_s, char *mem_p) {
-    for (int i = read_s; i < buff_size; i++ ) {
-        mem_p[i] = '\0';
+    for ( ; read_s < buff_size; read_s++ ) {
+        mem_p[read_s] = '\0';
     }
 }
