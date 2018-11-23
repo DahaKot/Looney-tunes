@@ -13,18 +13,17 @@
     semops[num].sem_op  = op;               \
     semops[num].sem_flg = flag;
 
-#define INIT        semops + 0
-#define WRITE       semops + 6
-#define P_SEM2      semops + 9
-#define P_MUTE      semops + 10
-#define V_MUTE      semops + 11
-#define V_SEM1      semops + 12
-#define V_TRASH     semops + 13
-#define V_PROD      semops + 14
-#define CHECK_C     semops + 15
-#define ENTRY       semops + 7
-
-#define D if (0)
+enum semaphores {
+    INIT,
+    READ,
+    WRITE,
+    MUTEX,
+    SEM1,
+    SEM2,
+    TRASH,
+    PRODUCER,
+    CONSUMER
+};
 
 void clear_rest (int read_s, char *mem_p);
 
@@ -50,45 +49,35 @@ int main(int argc, char ** argv) {
     int shared_mem = shmget(shm_key, buff_size, IPC_CREAT | 0644);
     char* mem_p = shmat(shared_mem, NULL, 0);
 
-    struct sembuf semops[17];
-    SET_SEMOP(0, 0, 0,   IPC_NOWAIT);//init                        
-    SET_SEMOP(1, 0, 1,   IPC_NOWAIT);                             
-    SET_SEMOP(2, 1, 1,   IPC_NOWAIT);                          
-    SET_SEMOP(3, 2, 1,   IPC_NOWAIT);                             
-    SET_SEMOP(4, 3, 1,   IPC_NOWAIT);                               
-    SET_SEMOP(5, 5, 1,   IPC_NOWAIT);
-    SET_SEMOP(6, 2, -1,  SEM_UNDO);  //write
-    SET_SEMOP(7, 8, -1, SEM_UNDO | IPC_NOWAIT);  //check_consumer
-    SET_SEMOP(8, 8, 1,  SEM_UNDO | IPC_NOWAIT);                   
-    SET_SEMOP(9, 5, -1,  0);         //p_sem2
-    SET_SEMOP(10, 3, -1,  SEM_UNDO);  //p_mute
-    SET_SEMOP(11, 3, 1,   SEM_UNDO);  //v_mute
-    SET_SEMOP(12, 4, 1,  0);         //v_sem1
-    SET_SEMOP(13, 6, 1,  IPC_NOWAIT);//v_trash
-    SET_SEMOP(14, 7, 1,  SEM_UNDO);  //v_producer
-    SET_SEMOP(15, 8, -1, SEM_UNDO); //check_consumer
-    SET_SEMOP(16, 8, 1, SEM_UNDO);
+    struct sembuf semops[6];
     
+    SET_SEMOP(0, INIT, 0,   IPC_NOWAIT);//INIT                        
+    SET_SEMOP(1, INIT, 1,   0);                             
+    SET_SEMOP(2, SEM2, 1,   0);
+    int semop_ = semop(sems, semops, 3);
 
-    int semop_ = semop(sems, INIT, 6);
-    D printf("init-ed %d\n", semop_);
+    SET_SEMOP(0, WRITE, 0,      SEM_UNDO);
+    SET_SEMOP(1, WRITE, 1,      SEM_UNDO);
+    SET_SEMOP(2, PRODUCER, 1,   SEM_UNDO);
+    semop_ = semop(sems, semops, 3);
 
-    semop_ = semop(sems, WRITE, 1);
+    SET_SEMOP(0, CONSUMER, -1,  0);
+    SET_SEMOP(1, CONSUMER, 1,   0);
+    semop_ = semop(sems, semops, 2);
+
     lseek(input_fd, 0, SEEK_SET);
-    D printf("write-ed\n");
-
-    semop_ = semop(sems, V_PROD, 1);
-    semop_ = semop(sems, CHECK_C, 2);
 
     while (1) {
         read_s = read(input_fd, buff, buff_size);
 
         errno = 0;
-        semop_ = semop(sems, ENTRY, 4);
-            /*semop_ = semop(sems, P_SEM2, 1);
-            D printf("sem2-ed\n");
-            semop_ = semop(sems, P_MUTE, 1);
-            D printf("mute-ed\n");*/
+        SET_SEMOP(0, CONSUMER, -1,  IPC_NOWAIT);
+        SET_SEMOP(1, CONSUMER, 1,   IPC_NOWAIT);                   
+        SET_SEMOP(2, SEM2,  -1,     0);
+        SET_SEMOP(3, MUTEX, 0,      SEM_UNDO);
+        SET_SEMOP(4, MUTEX, 1,      SEM_UNDO);
+        semop_ = semop(sems, semops, 5);
+
         if (semop_ == -1 && errno == EAGAIN) {
             printf("consumer has been murdered\n");
             return 0;
@@ -96,44 +85,42 @@ int main(int argc, char ** argv) {
 
         if (read_s > 0 && read_s == buff_size) {
             memcpy(mem_p, buff, read_s);
-            D printf("copy-ed\n");
 
-            semop_ = semop(sems, V_TRASH, 1);
-            D printf("untrash-ed\n");
+            SET_SEMOP(0, TRASH, 1,  IPC_NOWAIT);
+            SET_SEMOP(1, MUTEX, -1, SEM_UNDO);
+            SET_SEMOP(2, SEM1, 1,   0);
+            semop_ = semop(sems, semops, 3);
         }
         else if (read_s > 0 && read_s < buff_size) {
             memcpy(mem_p, buff, read_s);
-            D printf("copy-ed\n");
             clear_rest(read_s, mem_p);
 
-            semop_ = semop(sems, V_TRASH, 1);
-            D printf("untrash-ed\n");
+            SET_SEMOP(0, TRASH, 1,  IPC_NOWAIT);
+            SET_SEMOP(1, MUTEX, -1, SEM_UNDO);
+            SET_SEMOP(2, SEM1, 1,   0);
+            semop_ = semop(sems, semops, 3);
         }
         else if (read_s == 0) {
             mem_p[0] = EOF;
             clear_rest(1, mem_p);
 
-            semop_ = semop(sems, V_TRASH, 1);
-            D printf("untrash-ed\n");
+            SET_SEMOP(0, TRASH, 1,  IPC_NOWAIT);
+            SET_SEMOP(1, MUTEX, -1, SEM_UNDO);
+            SET_SEMOP(2, SEM1, 1,   0);
+            semop_ = semop(sems, semops, 3);
 
-            semop_ = semop(sems, V_MUTE, 1);
-            semop_ = semop(sems, V_SEM1, 1);
             break;
         }
         else {
             printf("smth went wrong!\n(Do not believe consumer)\n");
-            semop_ = semop(sems, V_MUTE, 1);
-            semop_ = semop(sems, V_SEM1, 1);
+
+            SET_SEMOP(0, MUTEX, -1, SEM_UNDO);
+            SET_SEMOP(1, SEM1, 1,   0);
+            semop_ = semop(sems, semops, 2);
+
             return 0;
         }
-
-        semop_ = semop(sems, V_MUTE, 1);
-        D printf("unmute-ed\n");
-        semop_ = semop(sems, V_SEM1, 1);
-        D printf("unsem1-ed\n");
     }
-
-    D printf("exit-ed\n");
 
     return 0;
 }
